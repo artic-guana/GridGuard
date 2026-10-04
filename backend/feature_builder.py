@@ -182,6 +182,17 @@ def _rolling_mean(values: np.ndarray, window: int) -> np.ndarray:
     return np.nanmean(rv / np.maximum(rc, 1), axis=1)
 
 
+def _ratio(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
+    """Element-wise ratio with a safe denominator. Never returns inf."""
+    den = np.where(
+        np.isnan(denominator) | (denominator <= 0),
+        1e-6,
+        denominator,
+    )
+    num = np.where(np.isnan(numerator), 0.0, numerator)
+    return num / den
+
+
 def build_consumer_features(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
@@ -208,14 +219,17 @@ def build_consumer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     f = pd.DataFrame({"CONS_NO": ids})
 
+    # ---------- Basic statistics ----------
     f["mean_consumption"]   = np.nanmean(X, axis=1)
     f["median_consumption"] = np.nanmedian(X, axis=1)
     f["std_consumption"]    = np.nanstd(X, axis=1)
     f["min_consumption"]    = np.nanmin(X, axis=1)
     f["max_consumption"]    = np.nanmax(X, axis=1)
     f["variance"]           = np.nanvar(X, axis=1)
-    f["coefficient_of_variation"] = f["std_consumption"] / (f["mean_consumption"] + 1e-6)
+    f["coefficient_of_variation"] = _ratio(f["std_consumption"].values,
+                                           f["mean_consumption"].values)
 
+    # ---------- Missing / zero ----------
     nan_mask  = np.isnan(X)
     zero_mask = (X == 0)
     f["missing_count"]      = nan_mask.sum(axis=1)
@@ -225,26 +239,31 @@ def build_consumer_features(df: pd.DataFrame) -> pd.DataFrame:
     f["max_zero_streak"]    = _max_consecutive_true(zero_mask)
     f["max_missing_streak"] = _max_consecutive_true(nan_mask)
 
+    # ---------- Change / volatility ----------
     X_filled = pd.DataFrame(X).ffill(axis=1).values
     diff = np.diff(X_filled, axis=1)
+
     f["mean_absolute_change"] = np.nanmean(np.abs(diff), axis=1)
     f["max_increase"]         = np.nanmax(diff, axis=1)
     f["max_decrease"]         = np.nanmin(diff, axis=1)
 
-    pct = np.where(X_filled[:, :-1] > 0, diff / X_filled[:, :-1], 0.0)
+    # FIX: compute denominator safely BEFORE dividing to avoid 0/0 warnings
+    denom = X_filled[:, :-1]
+    denom_safe = np.where(denom > 0, denom, 1.0)
+    pct = np.where(denom > 0, diff / denom_safe, 0.0)
     pct = np.clip(pct, -5, 5)
+
     f["mean_percentage_change"]  = np.nanmean(np.abs(pct), axis=1)
     f["max_percentage_increase"] = np.nanmax(pct, axis=1)
     f["max_percentage_decrease"] = np.nanmin(pct, axis=1)
     f["large_increase_count"]    = (pct >  0.5).sum(axis=1)
     f["large_decrease_count"]    = (pct < -0.5).sum(axis=1)
 
-    # --- Rolling means: only compute if we have MORE days than the window ---
+    # ---------- Rolling means ----------
     for w in (7, 30, 90):
         if n_days > w:
             f[f"{w}_day_mean"] = _rolling_mean(X, w)
         else:
-            # Not enough days for a full rolling window — use the global mean
             f[f"{w}_day_mean"] = np.nanmean(X, axis=1)
 
     last30 = min(30, n_days)
@@ -252,51 +271,77 @@ def build_consumer_features(df: pd.DataFrame) -> pd.DataFrame:
     f["recent_30_day_mean"] = np.nanmean(X[:, -last30:], axis=1)
     f["recent_90_day_mean"] = np.nanmean(X[:, -last90:], axis=1)
 
-    # Guard against a NaN historical mean
     hist = f["90_day_mean"].values
-    hist_safe = np.where(np.isnan(hist) | (hist == 0), 1e-6, hist)
-    f["recent_vs_historical"] = f["recent_30_day_mean"] / hist_safe
+    f["recent_vs_historical"] = _ratio(f["recent_30_day_mean"].values, hist)
     f["consumption_trend"]    = f["recent_30_day_mean"] - hist
 
+    # ---------- Quantiles ----------
     f["q25"] = np.nanpercentile(X, 25, axis=1)
     f["q50"] = np.nanpercentile(X, 50, axis=1)
     f["q75"] = np.nanpercentile(X, 75, axis=1)
     f["iqr"] = f["q75"] - f["q25"]
 
-    # --- skewness (numpy — avoids pandas 2.2 deprecation) ---
+    # ---------- Skewness (numpy — avoids pandas 2.2 deprecation) ----------
     _m = np.nanmean(X, axis=1, keepdims=True)
     _s = np.nanstd(X,  axis=1, keepdims=True)
     f["skewness"] = np.nanmean(((X - _m) / (_s + 1e-9)) ** 3, axis=1)
 
+    # ---------- Drop ratio (adaptive window) ----------
+    # FIX: 90-day seed no longer forces drop_ratio to 1.0.
+    # Use the largest window that fits.
     if n_days >= 180:
-        f["drop_ratio"] = (
-            np.nanmean(X[:, -90:], axis=1)
-            / (np.nanmean(X[:, -180:-90], axis=1) + 1e-6)
+        f["drop_ratio"] = _ratio(
+            np.nanmean(X[:, -90:],  axis=1),
+            np.nanmean(X[:, -180:-90], axis=1),
+        )
+    elif n_days >= 60:
+        f["drop_ratio"] = _ratio(
+            np.nanmean(X[:, -30:],  axis=1),
+            np.nanmean(X[:, -60:-30], axis=1),
+        )
+    elif n_days >= 30:
+        f["drop_ratio"] = _ratio(
+            np.nanmean(X[:, -10:],  axis=1),
+            np.nanmean(X[:, -30:-10], axis=1),
         )
     else:
         f["drop_ratio"] = 1.0
 
+    # ---------- Recovery ratio (adaptive window) ----------
     if n_days >= 60:
-        f["recovery_ratio"] = (
-            np.nanmean(X[:, -30:], axis=1)
-            / (np.nanmean(X[:, -60:-30], axis=1) + 1e-6)
+        f["recovery_ratio"] = _ratio(
+            np.nanmean(X[:, -30:],  axis=1),
+            np.nanmean(X[:, -60:-30], axis=1),
+        )
+    elif n_days >= 30:
+        f["recovery_ratio"] = _ratio(
+            np.nanmean(X[:, -10:],  axis=1),
+            np.nanmean(X[:, -30:-10], axis=1),
         )
     else:
         f["recovery_ratio"] = 1.0
 
+    # ---------- Seasonal ----------
     if n_days >= 30:
         months = pd.to_datetime(daily.columns).month
         monthly = pd.DataFrame(X).T.groupby(months).mean().T
-        f["seasonal_amplitude"] = monthly.std(axis=1).values / (f["mean_consumption"] + 1e-6)
+        f["seasonal_amplitude"] = _ratio(monthly.std(axis=1).values,
+                                         f["mean_consumption"].values)
         last_month = pd.to_datetime(daily.columns[-1]).month
         expected = monthly[last_month].values
-        f["seasonal_residual"] = np.abs(f["recent_30_day_mean"] - expected) / (expected + 1e-6)
+        f["seasonal_residual"] = _ratio(
+            np.abs(f["recent_30_day_mean"].values - expected),
+            expected,
+        )
     else:
         f["seasonal_amplitude"] = 0.0
         f["seasonal_residual"]  = 0.0
 
+    # ---------- Peer z-score ----------
     try:
-        f["peer_bucket"] = pd.qcut(f["mean_consumption"], q=10, labels=False, duplicates="drop")
+        f["peer_bucket"] = pd.qcut(
+            f["mean_consumption"], q=10, labels=False, duplicates="drop"
+        )
         pm = f.groupby("peer_bucket")["mean_consumption"].transform("mean")
         ps = f.groupby("peer_bucket")["mean_consumption"].transform("std")
         f["peer_zscore"] = (f["mean_consumption"] - pm) / (ps + 1e-6)
@@ -304,31 +349,33 @@ def build_consumer_features(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         f["peer_zscore"] = 0.0
 
-    f["missing_zscore"] = (
-        (f["missing_percentage"] - f["missing_percentage"].median())
-        / (f["missing_percentage"].std() + 1e-9)
-    )
-    f["zero_zscore"] = (
-        (f["zero_percentage"] - f["zero_percentage"].median())
-        / (f["zero_percentage"].std() + 1e-9)
-    )
+    # ---------- Z-scores for missing / zero ----------
+    mp_med = f["missing_percentage"].median()
+    mp_std = f["missing_percentage"].std()
+    f["missing_zscore"] = (f["missing_percentage"] - mp_med) / (mp_std + 1e-9)
 
+    zp_med = f["zero_percentage"].median()
+    zp_std = f["zero_percentage"].std()
+    f["zero_zscore"] = (f["zero_percentage"] - zp_med) / (zp_std + 1e-9)
+
+    # ---------- Deviation vs own history ----------
     f["historical_mean"] = f["90_day_mean"]
     f["current_mean"]    = f["recent_30_day_mean"]
-    f["deviation_pct"]   = (
-        (f["current_mean"] - f["historical_mean"])
-        / (f["historical_mean"] + 1e-6) * 100
-    )
 
-    # --- Rolling 30-day mean along axis=1 (cumsum-based, pandas 2.2 compatible) ---
-    window = 30
-    if n_days >= window:
+    dev_num = f["current_mean"] - f["historical_mean"]
+    dev_den = f["historical_mean"].where(f["historical_mean"] > 0, np.nan)
+    f["deviation_pct"] = (dev_num / (dev_den + 1e-6)) * 100
+
+    # ---------- Detection window ----------
+    # FIX: use a shorter window (14 days) so thefts starting in the last
+    # third of the seed window still register a detection.
+    window = 14
+    if n_days > window:
         valid_arr  = (~np.isnan(X_filled)).astype(np.float32)
         filled_arr = np.nan_to_num(X_filled, nan=0.0)
         cum_v = np.cumsum(filled_arr, axis=1)
         cum_c = np.cumsum(valid_arr,  axis=1)
 
-        # shifted[i, k] = cum[i, k - window] for k >= window, else 0
         pad_v = np.zeros((n_rows, window), dtype=cum_v.dtype)
         pad_c = np.zeros((n_rows, window), dtype=cum_c.dtype)
         shifted_v = np.concatenate([pad_v, cum_v[:, :-window]], axis=1)
@@ -337,21 +384,23 @@ def build_consumer_features(df: pd.DataFrame) -> pd.DataFrame:
         rv = cum_v - shifted_v
         rc = cum_c - shifted_c
 
-        roll_30 = rv / np.maximum(rc, 1)
-        roll_30[:, :window - 1] = np.nan   # first `window-1` positions are warm-up
+        roll_w = rv / np.maximum(rc, 1)
+        roll_w[:, :window - 1] = np.nan
 
         threshold = 0.7 * f["historical_mean"].values[:, None]
-        below = np.where(np.isnan(roll_30), False, roll_30 < threshold)
+        below = np.where(np.isnan(roll_w), False, roll_w < threshold)
 
         detect_start = np.full(n_rows, -1, dtype=int)
         for i in range(n_rows):
             if below[i].any():
                 detect_start[i] = int(np.argmax(below[i]))
-        f["detection_days"] = np.where(detect_start >= 0, n_days - detect_start, 0)
+        f["detection_days"] = np.where(
+            detect_start >= 0, n_days - detect_start, 0
+        )
     else:
         f["detection_days"] = 0
 
-    # Attach dt_id for cluster aggregation
+    # ---------- Attach dt_id ----------
     meta = (
         df.groupby("consumer_id")[["dt_id"]]
         .first()
@@ -424,7 +473,8 @@ def compute_dt_loss_ratio(dt_df: pd.DataFrame, consumer_df: pd.DataFrame) -> pd.
         )
 
     loss = pd.concat([dt_total, cons_total], axis=1).reset_index()
-    loss["dt_loss_ratio"] = loss["dt_input"] / (loss["consumer_sum"] + 1e-6)
+    loss["dt_loss_ratio"] = _ratio(loss["dt_input"].values, loss["consumer_sum"].values)
+
     loss["dt_loss_zscore"] = (
         (loss["dt_loss_ratio"] - loss["dt_loss_ratio"].mean())
         / (loss["dt_loss_ratio"].std() + 1e-9)

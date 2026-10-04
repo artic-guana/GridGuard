@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -19,6 +19,9 @@ import {
   LucideIcon,
 } from 'lucide-react';
 
+// ------------------------------------------------------------
+// Types
+// ------------------------------------------------------------
 interface SidebarProps {
   mobileOpen: boolean;
   setMobileOpen: (open: boolean) => void;
@@ -37,9 +40,87 @@ interface NavGroup {
   items: NavItem[];
 }
 
+interface SummaryCounts {
+  flaggedConsumers: number;
+  suspiciousDts: number;
+  totalConsumers: number;
+  totalDts: number;
+  computedAt: string;
+  online: boolean;
+}
+
+// ------------------------------------------------------------
+// Live counts hook
+// ------------------------------------------------------------
+function useSidebarCounts(): SummaryCounts {
+  const [counts, setCounts] = useState<SummaryCounts>({
+    flaggedConsumers: 0,
+    suspiciousDts: 0,
+    totalConsumers: 0,
+    totalDts: 0,
+    computedAt: '',
+    online: false,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const r = await fetch('/api/backend/api/v1/scores/summary', {
+          cache: 'no-store',
+        });
+
+        // 404 = backend up but no data yet → treat as zero, still "online"
+        if (r.status === 404) {
+          if (!cancelled) {
+            setCounts((c) => ({ ...c, online: true }));
+          }
+          return;
+        }
+
+        if (!r.ok) throw new Error(`API ${r.status}`);
+
+        const data = await r.json();
+        if (cancelled) return;
+
+        setCounts({
+          flaggedConsumers: Number(data?.consumers?.flagged ?? 0),
+          suspiciousDts:    Number(data?.dts?.suspicious ?? 0),
+          totalConsumers:   Number(data?.consumers?.total ?? 0),
+          totalDts:         Number(data?.dts?.total ?? 0),
+          computedAt:       data?.computed_at ?? '',
+          online:           true,
+        });
+      } catch {
+        if (!cancelled) {
+          setCounts((c) => ({ ...c, online: false }));
+        }
+      }
+    }
+
+    load();
+    const id = setInterval(() => {
+      if (!document.hidden) load();
+    }, 60_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  return counts;
+}
+
+// ------------------------------------------------------------
+// Sidebar
+// ------------------------------------------------------------
 export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) => {
   const pathname = usePathname();
+  const counts = useSidebarCounts();
 
+  // Build nav with live badges
   const navGroups: NavGroup[] = [
     {
       label: 'OVERVIEW',
@@ -58,8 +139,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
     {
       label: 'INVESTIGATION',
       items: [
-        { name: 'Alerts', href: '/alerts', icon: AlertTriangle, badge: '4' },
-        { name: 'Investigations', href: '/investigations', icon: SearchCode, badge: '6' },
+        {
+          name: 'Alerts',
+          href: '/alerts',
+          icon: AlertTriangle,
+          badge: counts.flaggedConsumers > 0 ? String(counts.flaggedConsumers) : undefined,
+        },
+        {
+          name: 'Investigations',
+          href: '/investigations',
+          icon: SearchCode,
+          badge: counts.suspiciousDts > 0 ? String(counts.suspiciousDts) : undefined,
+        },
         { name: 'Live Monitoring', href: '/live', icon: Radio, live: true },
       ],
     },
@@ -77,6 +168,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
     }
     return pathname.startsWith(href);
   };
+
+  // Footer status text derived from live data
+  const statusLabel = !counts.online
+    ? 'Backend Offline'
+    : counts.totalConsumers === 0
+    ? 'Awaiting evaluation'
+    : `${counts.totalDts} DTs · ${counts.totalConsumers} consumers`;
+
+  const statusDotClass = !counts.online
+    ? 'bg-rose-600'
+    : counts.suspiciousDts > 0
+    ? 'bg-amber-500'
+    : 'bg-emerald-600';
 
   const navContent = (
     <div className="flex flex-col h-full bg-white text-slate-800 border-r border-slate-200 w-64 select-none font-sans">
@@ -156,18 +260,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, setMobileOpen }) =
         ))}
       </div>
 
-      {/* Footer System Status */}
+      {/* Footer System Status — live */}
       <div className="p-3.5 border-t border-slate-200 space-y-2.5">
         <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border border-slate-200 rounded-md">
-          <div className="flex items-center gap-2 text-xs text-slate-700 font-mono">
-            <span className="w-2 h-2 rounded-full bg-emerald-600" />
-            <span className="font-semibold text-[11px]">Grid Feeder F001 Online</span>
+          <div className="flex items-center gap-2 text-xs text-slate-700 font-mono truncate">
+            <span className={`w-2 h-2 rounded-full shrink-0 ${statusDotClass}`} />
+            <span className="font-semibold text-[11px] truncate" title={statusLabel}>
+              {statusLabel}
+            </span>
           </div>
-          <Activity className="w-3.5 h-3.5 text-emerald-600" />
+          <Activity className="w-3.5 h-3.5 text-slate-400 shrink-0" />
         </div>
 
         <Link
-          href="/dashboard"
+          href="/settings"
           className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900 transition-colors"
         >
           <Settings className="w-4 h-4" />

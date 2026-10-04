@@ -47,7 +47,7 @@ interface CaseRow {
   probableCause: string;
   riskScore: number;
   confidencePct: number;
-  priority: string;
+  priority: string;        // full priority string: "P1 - Immediate inspection"
   createdAt: string;
   status: CaseStatus;
   raw: ApiConsumerScore;
@@ -56,23 +56,60 @@ interface CaseRow {
 // ------------------------------------------------------------
 // Mapping helpers
 // ------------------------------------------------------------
-function statusFromPriority(priority?: string, riskLevel?: string): CaseStatus {
-  if (priority?.startsWith('P1')) return 'Open';
-  if (priority?.startsWith('P2')) return 'Investigating';
-  if (priority?.startsWith('P3')) return 'Requires Review';
-  if (riskLevel === 'Normal') return 'Resolved';
-  return 'Requires Review';
+
+/**
+ * Extract just the code from a priority string:
+ *   "P1 - Immediate inspection" → "P1"
+ *   "P4" → "P4"
+ *   undefined → "P4"
+ */
+function priorityCode(priority?: string): string {
+  if (!priority) return 'P4';
+  const m = priority.match(/^(P[1-4])/);
+  return m ? m[1] : 'P4';
+}
+
+/**
+ * Case lifecycle status.
+ * Cause is authoritative; priority is only a fallback.
+ *
+ *   Theft / Tampering      → Open
+ *   Meter Malfunction      → Investigating
+ *   Communication Failure  → Requires Review
+ *   Legitimate Abnormal    → Investigating
+ *   Requires Review        → Requires Review
+ *   Normal                 → Resolved
+ */
+function statusFromRow(cause?: string, priority?: string): CaseStatus {
+  const c = (cause ?? '').trim();
+
+  if (c === 'Theft / Tampering')      return 'Open';
+  if (c === 'Meter Malfunction')      return 'Investigating';
+  if (c === 'Legitimate Abnormal')    return 'Investigating';
+  if (c === 'Communication Failure')  return 'Requires Review';
+  if (c === 'Requires Review')        return 'Requires Review';
+  if (c === 'Normal')                 return 'Resolved';
+
+  // Fallback if cause is missing
+  const code = priorityCode(priority);
+  if (code === 'P1') return 'Open';
+  if (code === 'P2') return 'Investigating';
+  if (code === 'P3') return 'Requires Review';
+  return 'Resolved';
 }
 
 function toCase(c: ApiConsumerScore, computedAt: string): CaseRow {
+  const cause = c.probable_cause ?? 'Unknown';
+  const priority = c.priority ?? c.risk_level ?? 'P4';
+
   return {
     id: `CASE-${c.CONS_NO.replace('CONS-', '')}`,
     consumerId: c.CONS_NO,
     transformerId: c.dt_id ?? '—',
-    probableCause: c.probable_cause ?? 'Unknown',
-    riskScore: Math.round(c.combined_score * 100),
+    probableCause: cause,
+    riskScore: Math.round((c.combined_score ?? 0) * 100),
     confidencePct: Math.round((c.cause_confidence ?? 0) * 100),
-    priority: c.risk_level,
+    priority,
     createdAt: computedAt
       ? new Date(computedAt).toLocaleString([], {
           month: 'short',
@@ -81,7 +118,7 @@ function toCase(c: ApiConsumerScore, computedAt: string): CaseRow {
           minute: '2-digit',
         })
       : '—',
-    status: statusFromPriority(c.priority, c.risk_level),
+    status: statusFromRow(cause, priority),
     raw: c,
   };
 }
@@ -126,6 +163,7 @@ export default function InvestigationsPage() {
         computedAt = s.computed_at ?? '';
       }
 
+      // A "case" is any consumer flagged for follow-up
       const rows = consumers
         .filter((c) => c.predicted_flag === 1)
         .map((c) => toCase(c, computedAt));
@@ -377,7 +415,7 @@ export default function InvestigationsPage() {
       {/* Detail modal */}
       {selectedCase && (
         <CaseDetailModal
-          item={selectedCase as any}
+          item={selectedCase}
           onClose={() => setSelectedCase(null)}
         />
       )}
