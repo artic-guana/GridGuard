@@ -1,6 +1,7 @@
 /**
  * app/transformers/[id]/page.tsx
- * Distribution Transformer detail page showing DT health metrics and attached consumer inventory.
+ * Distribution Transformer detail page showing DT health metrics, attached consumer inventory,
+ * and PDF diagnostic report download capability.
  */
 
 'use client';
@@ -10,13 +11,12 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useScoresDTs, useScoresConsumers, useRunEvaluation } from '@/lib/hooks/useApi';
+import { DownloadReportButton } from '@/components/reports/DownloadReportButton';
 import {
   ArrowLeft,
   RefreshCw,
   AlertTriangle,
   Cpu,
-  ShieldAlert,
-  Activity,
   ArrowRight,
 } from 'lucide-react';
 
@@ -81,14 +81,27 @@ export default function TransformerDetailPage() {
           </div>
         </div>
 
-        <button
-          onClick={handleRefresh}
-          disabled={isEvaluating || isLoading}
-          className="flex items-center gap-2 bg-sky-700 hover:bg-sky-800 disabled:bg-slate-300 text-white px-3.5 py-1.5 rounded-md text-xs font-semibold shadow-2xs transition-colors cursor-pointer self-start md:self-auto"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isEvaluating ? 'animate-spin' : ''}`} />
-          <span>{isEvaluating ? 'Evaluating...' : 'Refresh'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+          {dt && (
+            <DownloadReportButton
+              kind="transformer"
+              payload={{
+                dt,
+                consumers: dtConsumers,
+              }}
+              label="Download DT PDF Report"
+            />
+          )}
+
+          <button
+            onClick={handleRefresh}
+            disabled={isEvaluating || isLoading}
+            className="flex items-center gap-2 bg-sky-700 hover:bg-sky-800 disabled:bg-slate-300 text-white px-3.5 py-1.5 rounded-md text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isEvaluating ? 'animate-spin' : ''}`} />
+            <span>{isEvaluating ? 'Evaluating...' : 'Refresh'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Loading State */}

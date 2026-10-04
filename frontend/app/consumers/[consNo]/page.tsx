@@ -1,7 +1,7 @@
 /**
- * app/consumers/[id]/page.tsx
+ * app/consumers/[consNo]/page.tsx
  * Deep-dive consumer diagnostic report page presenting risk gauges, ML scores, feature breakdowns,
- * SHAP evidence visualizations, and JSON export capabilities.
+ * SHAP evidence visualizations, PDF generation capabilities, and JSON export.
  */
 
 'use client';
@@ -11,6 +11,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useScoresConsumer, useRunEvaluation } from '@/lib/hooks/useApi';
+import { DownloadReportButton } from '@/components/reports/DownloadReportButton';
 import {
   ArrowLeft,
   RefreshCw,
@@ -26,7 +27,8 @@ import {
 
 export default function ConsumerDetailPage() {
   const params = useParams();
-  const consNo = typeof params?.id === 'string' ? params.id : Array.isArray(params?.id) ? params.id[0] : '';
+  const rawId = params?.consNo || params?.id;
+  const consNo = typeof rawId === 'string' ? rawId : Array.isArray(rawId) ? rawId[0] : '';
 
   const { data: consumer, error, isLoading, mutate } = useScoresConsumer(consNo);
   const { trigger: runEvaluation, isMutating: isEvaluating } = useRunEvaluation();
@@ -57,10 +59,10 @@ export default function ConsumerDetailPage() {
   const features = consumer?.features || {};
   const featureEntries = Object.entries(features);
 
-  const consumptionStats: [string, number][] = [];
-  const rollingWindows: [string, number][] = [];
-  const dataQuality: [string, number][] = [];
-  const anomalySignals: [string, number][] = [];
+  const consumptionStats: [string, unknown][] = [];
+  const rollingWindows: [string, unknown][] = [];
+  const dataQuality: [string, unknown][] = [];
+  const anomalySignals: [string, unknown][] = [];
 
   featureEntries.forEach(([key, val]) => {
     const k = key.toLowerCase();
@@ -113,15 +115,27 @@ export default function ConsumerDetailPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {consumer && (
-            <button
-              onClick={handleExportJSON}
-              className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 px-3.5 py-1.5 rounded-md text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5 text-slate-600" />
-              <span>Export JSON Report</span>
-            </button>
+            <>
+              <DownloadReportButton
+                kind="consumer"
+                payload={{
+                  CONS_NO: consumer.CONS_NO,
+                  score: consumer,
+                  features: consumer.features || {},
+                }}
+                label="Download PDF Report"
+              />
+
+              <button
+                onClick={handleExportJSON}
+                className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 px-3.5 py-1.5 rounded-md text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-600" />
+                <span>Export JSON</span>
+              </button>
+            </>
           )}
 
           <button
@@ -402,7 +416,7 @@ export default function ConsumerDetailPage() {
                       {consumptionStats.map(([k, v]) => (
                         <tr key={k} className="hover:bg-slate-50">
                           <td className="py-2 px-3 text-slate-600 font-sans">{k}</td>
-                          <td className="py-2 px-3 font-bold text-slate-900 text-right">{v}</td>
+                          <td className="py-2 px-3 font-bold text-slate-900 text-right">{String(v ?? '—')}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -421,7 +435,7 @@ export default function ConsumerDetailPage() {
                       {rollingWindows.map(([k, v]) => (
                         <tr key={k} className="hover:bg-slate-50">
                           <td className="py-2 px-3 text-slate-600 font-sans">{k}</td>
-                          <td className="py-2 px-3 font-bold text-slate-900 text-right">{v}</td>
+                          <td className="py-2 px-3 font-bold text-slate-900 text-right">{String(v ?? '—')}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -440,7 +454,7 @@ export default function ConsumerDetailPage() {
                       {dataQuality.map(([k, v]) => (
                         <tr key={k} className="hover:bg-slate-50">
                           <td className="py-2 px-3 text-slate-600 font-sans">{k}</td>
-                          <td className="py-2 px-3 font-bold text-slate-900 text-right">{v}</td>
+                          <td className="py-2 px-3 font-bold text-slate-900 text-right">{String(v ?? '—')}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -459,7 +473,7 @@ export default function ConsumerDetailPage() {
                       {anomalySignals.map(([k, v]) => (
                         <tr key={k} className="hover:bg-slate-50">
                           <td className="py-2 px-3 text-slate-600 font-sans">{k}</td>
-                          <td className="py-2 px-3 font-bold text-slate-900 text-right">{v}</td>
+                          <td className="py-2 px-3 font-bold text-slate-900 text-right">{String(v ?? '—')}</td>
                         </tr>
                       ))}
                     </tbody>
