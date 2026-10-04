@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+
+# Environment / secrets
+.env
+.env.*
+*.env
+
+# Local databases / data caches
+*.db
+*.sqlite3
+*.sqlite
+*.log
+*.pid
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+
+# ML model artifacts and generated outputs
+backend/models/*.pkl
+backend/models/*.joblib
+backend/models/*.h5
+backend/models/*.onnx
+backend/models/*.bin
+backend/models/*.pt
+backend/models/*.pth
+backend/data/
+backend/.cache/
+backend/cache/
+backend/artifacts/
+backend/results/
+backend/output/
+backend/*.csv
+backend/*.json
+backend/*.parquet
+
+# Node / Next.js frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/.vercel/
+frontend/coverage/
+frontend/.cache/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+site/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Windows generated files
+*.lnk
